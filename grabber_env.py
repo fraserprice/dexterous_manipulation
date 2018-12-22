@@ -1,6 +1,9 @@
 # Python imports
 import math
+import os
 import time
+from multiprocessing import Process
+
 import numpy as np
 
 from gym import Env, spaces
@@ -42,6 +45,9 @@ OBJECT_NAMES = ["arm0_joint0", "arm0_joint1", "arm0_link0", "arm0_joint2", "arm0
                 "arm2_joint0", "arm2_joint1", "arm2_link0", "arm2_joint2", "arm2_link1",
                 "base", "target"]
 
+VREP_LOCATION = "/Applications/V-REP_PRO_EDU_V3_5_0_Mac/vrep.app/Contents/MacOS/vrep"
+SCENE_PATH = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/VREP Repo/3D Model/simple_scene.ttt"
+
 
 class GrabberVREP:
     def __init__(self):
@@ -49,8 +55,78 @@ class GrabberVREP:
         self.vrep = vrep
         self.client_id = None
         self.object_handles = {}
+        self.vrep_process = None
 
-    def load_scene(self, filepath, port=PORT):
+    def start_vrep(self, scene_path=SCENE_PATH, port=PORT, timeout=10, headless=True):
+        def vrep_process():
+            h = " -h" if headless else ""
+            os.system(f"{VREP_LOCATION} -gREMOTEAPISERVERSERVICE_{PORT}_FALSE_TRUE{h} {scene_path}")
+        self.vrep_process = Process(target=vrep_process)
+        self.vrep_process.start()
+
+        for _ in range(timeout):
+            if self.__connect(port):
+                return self.__load_scene(scene_path, port)
+            time.sleep(1)
+
+        return False
+
+    def start_simulation(self):
+        self.vrep.simxSynchronous(self.client_id, True)
+        return self.vrep.simxStartSimulation(self.client_id, self.vrep.simx_opmode_blocking) == self.vrep.simx_return_ok
+
+    def step_simulation(self):
+        return self.vrep.simxSynchronousTrigger(self.client_id)
+
+    def stop_simulation(self):
+        return self.vrep.simxStopSimulation(self.client_id, self.vrep.simx_opmode_blocking) == self.vrep.simx_return_ok
+
+    def get_object_position(self, object_name, reference_object_name=None):
+        return self.__get_relative_object_data(object_name, reference_object_name, self.vrep.simxGetObjectPosition)
+
+    def get_object_orientation(self, object_name, reference_object_name=None):
+        return self.__get_relative_object_data(object_name, reference_object_name, self.vrep.simxGetObjectOrientation)
+
+    def get_object_velocity(self, object_name):
+        res, linear, angular = self.vrep.simxGetObjectVelocity(self.client_id,
+                                                               self.object_handles[object_name],
+                                                               self.vrep.simx_opmode_blocking)
+        if res != self.vrep.simx_return_ok:
+            print("Could not retrieve object data for " + object_name)
+            return None, None
+        else:
+            return linear, angular
+
+    def set_joint_target_velocity(self, joint_name, angular_velocity):
+        res = self.vrep.simxSetJointTargetVelocity(self.client_id, self.object_handles[joint_name], angular_velocity,
+                                                   self.vrep.simx_opmode_blocking)
+        return res == self.vrep.simx_return_ok
+
+    def __get_relative_object_data(self, object_name, reference_object_name, obj_data_function):
+        reference_object_handle = -1 if reference_object_name is None else self.object_handles[reference_object_name]
+        res, x, y, z = obj_data_function(self.client_id,
+                                         self.object_handles[object_name],
+                                         reference_object_handle,
+                                         self.vrep.simx_opmode_blocking)
+        if res != self.vrep.simx_return_ok:
+            print("Could not retrieve object data for " + object_name)
+            return -1, -1, -1
+        else:
+            return x, y, z
+
+    def __set_object_data(self, object_name, reference_object_name, obj_data_function):
+        reference_object_handle = -1 if reference_object_name is None else self.object_handles[reference_object_name]
+        res, x, y, z = obj_data_function(self.client_id,
+                                         self.object_handles[object_name],
+                                         reference_object_handle,
+                                         self.vrep.simx_opmode_blocking)
+        if res != self.vrep.simx_return_ok:
+            print("Could not retrieve object data for " + object_name)
+            return -1, -1, -1
+        else:
+            return x, y, z
+
+    def __load_scene(self, filepath, port=PORT):
         if self.__connect(port):
             res = self.vrep.simxLoadScene(self.client_id, filepath, 0xFF, self.vrep.simx_opmode_blocking)
             if res != self.vrep.simx_return_ok:
@@ -66,39 +142,9 @@ class GrabberVREP:
         print("Could not connect to VREP")
         return False
 
-    def get_object_position(self, object_name, reference_object_name=None):
-        return self.__get_relative_object_data(object_name, reference_object_name, self.vrep.simxGetObjectPosition)
-
-    def get_object_orientation(self, object_name, reference_object_name=None):
-        return self.__get_relative_object_data(object_name, reference_object_name, self.vrep.simxGetObjectOrientation)
-
-    def __get_relative_object_data(self, object_name, reference_object_name, obj_data_function):
-        reference_object_handle = -1 if reference_object_name is None else self.object_handles[reference_object_name]
-        res, x, y, z = obj_data_function(self.client_id,
-                                         self.object_handles[object_name],
-                                         reference_object_handle,
-                                         self.vrep.simx_opmode_streaming)
-        if res != self.vrep.simx_return_ok:
-            print("Could not retrieve object data for " + object_name)
-            return -1, -1, -1
-        else:
-            return x, y, z
-
-    def __set_object_data(self, object_name, reference_object_name, obj_data_function):
-        reference_object_handle = -1 if reference_object_name is None else self.object_handles[reference_object_name]
-        res, x, y, z = obj_data_function(self.client_id,
-                                         self.object_handles[object_name],
-                                         reference_object_handle,
-                                         self.vrep.simx_opmode_streaming)
-        if res != self.vrep.simx_return_ok:
-            print("Could not retrieve object data for " + object_name)
-            return -1, -1, -1
-        else:
-            return x, y, z
-
     def __connect(self, port):
         self.vrep.simxFinish(-1)
-        self.client_id = self.vrep.simxStart('127.0.0.1', port, True, True, 5000, 5)
+        self.client_id = self.vrep.simxStart('127.0.0.1', port, True, True, 1000, 5)
         return self.client_id != -1
 
     def __disconnect(self):
@@ -369,4 +415,4 @@ def uniform_sphere(radius):
 
 if __name__ == "__main__":
     gv = GrabberVREP()
-    print(gv.load_scene("/Users/fraser/Desktop/scene.ttt"))
+    print(gv.start_vrep())
