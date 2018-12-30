@@ -1,20 +1,19 @@
 import matplotlib
 import time
 
-import multiprocessing
 import numpy as np
 from scipy.stats import binned_statistic
 
 from stable_baselines.common.policies import MlpPolicy, MlpLstmPolicy, LstmPolicy
-from stable_baselines.common.vec_env import SubprocVecEnv
+from stable_baselines.common.vec_env import SubprocVecEnv, VecEnv, DummyVecEnv
 from stable_baselines import PPO2
-from grabber_env import SimpleRobot2D, LinkMode, AngleMode, RewardMode
+from grabber_env import VrepGrabber
 
 
-class SimpleRobotPpoAgent:
-    def __init__(self, simple_robot_env):
-        self.base_env = simple_robot_env
-        self.env = SubprocVecEnv([lambda: simple_robot_env for _ in range(multiprocessing.cpu_count())])
+class GrabberAgent:
+    def __init__(self, grabber_env):
+        self.base_env = grabber_env
+        self.env = DummyVecEnv([lambda: grabber_env for _ in range(1)])  # multiprocessing.cpu_count())])
         self.model = None
 
     def load_model(self, path):
@@ -28,10 +27,12 @@ class SimpleRobotPpoAgent:
     def new_model(self, policy=MlpPolicy, gamma=0.99):
         self.model = PPO2(policy, self.env, verbose=1, gamma=gamma)
 
-    def learn(self, timesteps, callback=None, save_interval_time=None):
+    def learn(self, timesteps, callback=None, checkpoint_interval=1000, path=None):
         if self.model is None:
             self.new_model()
-        self.model.learn(total_timesteps=timesteps, callback=callback)
+        for checkpoint in range(int(timesteps/checkpoint_interval)):
+            self.model.learn(total_timesteps=checkpoint_interval, callback=callback)
+            self.save_model(path)
 
     def demo(self, timestep_sleep=0.2):
         obs = self.base_env.reset()
@@ -156,39 +157,37 @@ def plot_validation(ep_histories, filename=None):
     plt.show()
 
 
-
 class CustomMlpPolicy(MlpPolicy):
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, **_kwargs):
-        super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, layers=[256, 256, 256], **_kwargs)
+        super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, **_kwargs)
 
 
 class CustomMlpLstmPolicy(MlpLstmPolicy):
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, **_kwargs):
-        super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, layers=[64, 128, 256, 256, 128, 64],
+        super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, layers=[256, 256, 256],
                          **_kwargs)
 
 
 if __name__ == "__main__":
-    # name = "instant/action_links/256_256_256_100gran_100m_0-1gamm"
-    # name = "instant/optimal_links/256_256_256_100gran_200m_0-1gamm"
-    # name = "instant/fixed_links/256_256_256_100gran_1m_0-99gamm_inv"
+    PATH_3DOF = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/VREP Repo/3D Model/3dof_grabber.ttt"
+    PATH_6DOF = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/VREP Repo/3D Model/6dof_grabber.ttt"
 
-    # name = "sim/action_links/256_256_256_50gran_1m_0-99gamm_linear"
-    name = "sim/optimal_links/256_256_256_100gran_20m_0-99gamm_linear"
+    name = "64_64_100k_6dof_no_pen"
+    fig_name = f"figures/{name}"
+    model_name = f"models/{name}"
 
-    base_env = SimpleRobot2D(action_granularity=100, target_distance=0.02,  episode_length=100,
-                             link_mode=LinkMode.OPTIMAL, angle_mode=AngleMode.SIM, reward_mode=RewardMode.LINEAR)
-    ppo_agent = SimpleRobotPpoAgent(base_env)
+    base_env = VrepGrabber(PATH_6DOF, headless=True)
+    ppo_agent = GrabberAgent(base_env)
 
-    # ppo_agent.new_model(policy=CustomMlpPolicy, gamma=0.99)
-    # # ppo_agent.load_model("models/" + "sim/fixed_links/256_256_256_100gran_40m_0-99gamm_linear_direct_vel_loss_2")
-    # loss_plotter = LossPlotter(max_points=150)
-    # ppo_agent.learn(20000000, callback=loss_plotter.get_plot_callback(verbose=False, filename="figures/" + name,
-    #                                                                   checkpoint_interval=60))
-    # loss_plotter.save("figures/" + name)
-    # ppo_agent.save_model("models/" + name)
+    ppo_agent.new_model(policy=CustomMlpPolicy, gamma=0.99)
+    # ppo_agent.load_model("models/" + "256_256_256_500k")
+    loss_plotter = LossPlotter(max_points=150)
+    ppo_agent.learn(100000,
+                    callback=loss_plotter.get_plot_callback(verbose=False, filename=fig_name, checkpoint_interval=60),
+                    checkpoint_interval=1000,
+                    path=model_name)
+    loss_plotter.save(fig_name)
+    ppo_agent.save_model(model_name)
 
-    ppo_agent.load_model("models/" + name)
-    # v = ppo_agent.validate(500)
-    # plot_validation(v, 'random_val')
-    ppo_agent.demo(timestep_sleep=0.1)
+    # ppo_agent.load_model(model_name)
+    # ppo_agent.demo(timestep_sleep=0.1)
