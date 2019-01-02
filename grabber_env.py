@@ -1,4 +1,5 @@
 import time
+from enum import Enum
 
 import numpy as np
 
@@ -6,48 +7,74 @@ from gym import Env, spaces
 
 from vrep_interface import VrepInterface
 
+
+class ActionType(Enum):
+    CONTINUOUS = 0
+    DISCRETE = 1
+
+
+class EnvType(Enum):
+    DOF3 = 3
+    DOF6 = 6
+    DOF9 = 9
+
+
+SCENE_FOLDER = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/VREP Repo/3D Model"
+scene_paths = {
+    EnvType.DOF3: f"{SCENE_FOLDER}/3dof_grabber.ttt",
+    EnvType.DOF6: f"{SCENE_FOLDER}/6dof_grabber.ttt",
+    EnvType.DOF9: f"{SCENE_FOLDER}/9dof_grabber.ttt"
+}
+
 VREP_OBJECT_NAMES = ["a0j0", "a0j1", "a0l0", "a0j2", "a0l1",
                      "a1j0", "a1j1", "a1l0", "a1j2", "a1l1",
                      "a2j0", "a2j1", "a2l0", "a2j2", "a2l1",
                      "base", "target"]
-VREP_JOINT_NAMES = ["a0j0", "a0j1", "a0j2",
-                    "a1j0", "a1j1", "a1j2",
-                    "a2j0", "a2j1", "a2j2"]
+VREP_JOINT_NAMES = {
+    EnvType.DOF3: ["a0j2", "a1j2", "a2j2"],
+    EnvType.DOF6: ["a0j1", "a0j2", "a1j1", "a1j2", "a2j1", "a2j2"],
+    EnvType.DOF9: ["a0j0", "a0j1", "a0j2", "a1j0", "a1j1", "a1j2", "a2j0", "a2j1", "a2j2"],
+}
 
 VREP_COLLECTION_NAMES = ['joints']
 JOINT_COLLECTION = VREP_COLLECTION_NAMES[0]
-SCENE_PATH = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/VREP Repo/3D Model/6dof_grabber.ttt"
 
-MAX_JOINT_VELOCITY = 90
+MAX_JOINT_ANGLE = np.pi / 2
 
 
 class VrepGrabber(Env):
-    def __init__(self, scene_path, episode_length=15, headless=True):
+    def __init__(self, grabber_type, vrep_port, action_granularity=None, episode_length=15):
         super(VrepGrabber, self).__init__()
 
+        self.port = vrep_port
+        self.action_granularity = action_granularity
+        self.action_type = ActionType.CONTINUOUS if action_granularity is None else ActionType.DISCRETE
+        self.grabber_type = grabber_type
+        self.dof = self.grabber_type.value
+
+        if self.action_type == ActionType.CONTINUOUS:
+            self.action_space = spaces.Box(low=0., high=1., shape=(self.dof,), dtype="float32")
+        else:
+            self.action_space = spaces.MultiDiscrete([self.action_granularity] * self.dof)
+
+        self.observation_space = spaces.Box(low=0., high=1., shape=(12 + self.dof,), dtype="float32")
+
         self.vrep_interface = VrepInterface()
-        if not self.vrep_interface.connect_to_vrep(scene_path, VREP_OBJECT_NAMES, VREP_COLLECTION_NAMES):
-             raise ConnectionError("Failed to connect to VREP")
-        # if not self.vrep_interface.start_vrep(SCENE_PATH, VREP_OBJECT_NAMES, VREP_COLLECTION_NAMES, headless=headless):
-        #     raise ConnectionError("Failed to start VREP")
+
+        print(f"Attempting to make connection on port {vrep_port}")
+        if not self.vrep_interface.connect_to_vrep(vrep_port):
+            print(f"Failed to connect to port {vrep_port}")
+        print(f"Successfully connected to VREP on port {vrep_port}. Client id: {self.vrep_interface.client_id}")
+
+        print("Loading scene...")
+        if not self.vrep_interface.load_scene(scene_paths[grabber_type], VREP_OBJECT_NAMES, VREP_COLLECTION_NAMES):
+            print(f"Failed to load scene on port {vrep_port}")
+        print(f"Successfully loaded scene on port {vrep_port}")
+
         self.episode_length = episode_length
         self.n_steps = 0
 
         self.time = 0
-
-        # Action space is joint target velocities
-        self.action_space = spaces.Box(low=0., high=1., shape=(9,), dtype="float32")
-
-        '''
-        Observation space is target object position + orientation, joint angles + velocities
-        obs1 = {
-            targ_x, targ_y, targ_z, targ_a, targ_b, targ_g,
-            j00_r, j01_r, j02_r,
-            j10_v, j11_v, j12_v,
-            j20_v, j21_v, j22_v,
-        }
-        '''
-        self.observation_space = spaces.Box(low=0., high=1., shape=(21,), dtype="float32")
 
     def step(self, action):
         if self.n_steps == 0:
@@ -57,31 +84,43 @@ class VrepGrabber(Env):
             self.vrep_interface.step_simulation()
         self.n_steps += 1
 
-        for i, joint_name in enumerate(VREP_JOINT_NAMES):
-            self.vrep_interface.set_joint_target_velocity(joint_name, denormalizej_velocity(action[i]))
+        for i, joint_name in enumerate(VREP_JOINT_NAMES[self.grabber_type]):
+            if self.action_type == ActionType.CONTINUOUS:
+                denormalized_angle = denormalize_angle(action[i])
+            else:
+                denormalized_angle = denormalize_discrete_angle(action[i], self.action_granularity)
+            self.vrep_interface.set_joint_target_angle(joint_name, denormalized_angle)
 
         obs = self.__get_observation()
         tx, ty, tz = [denormalize_position(coordinate) for coordinate in obs[0:3]]
-        reward = -abs((0.35 - tz)) #- 0.1 * (abs(ty) + abs(tx))  # if done else 0
 
         done = self.n_steps >= self.episode_length
+
+        reward = (50 if done else 1) * (-abs((0.2 - tz)) - 0.01 * (abs(ty) + abs(tx)))
 
         return obs, reward, done, {}
 
     def reset(self):
-        print(self.vrep_interface.vrep.simxGetPingTime(self.vrep_interface.client_id))
         if self.n_steps > 0:
             self.vrep_interface.stop_simulation()
             self.n_steps = 0
 
-        print(time.time() - self.time)
-
-        print("Resetting...")
+        print(f"Episode time: {time.time() - self.time}")
 
         return self.__get_observation()
 
     def render(self, mode='human', close=False):
         return False
+
+    '''
+    Observation space is target object position + orientation, joint angles + velocities
+    obs1 = {
+        targ_x, targ_y, targ_z, targ_a, targ_b, targ_g,
+        j00_r, j01_r, j02_r,
+        j10_r, jj11_r, j12_r,
+        j20_r, j21_r, j22_r,
+    }
+    '''
 
     def __get_observation(self):
         try:
@@ -93,18 +132,24 @@ class VrepGrabber(Env):
             observation = [tx, ty, tz, ta, tb, tg, vx, vy, vz, va, vb, vg]
 
             joint_angles = self.vrep_interface.get_collection_joint_rotations(JOINT_COLLECTION)
-            for joint_name in VREP_JOINT_NAMES:
+            for joint_name in VREP_JOINT_NAMES[self.grabber_type]:
+                # print(joint_angles[joint_name] * 180 / np.pi)
                 observation.append(normalize_radian(joint_angles[joint_name]))
 
             return np.array(observation)
         except (KeyError, TypeError):
+            print("Failed to get observation")
             self.n_steps = self.episode_length
-            self.vrep_interface.reload_scene(SCENE_PATH, VREP_OBJECT_NAMES, VREP_COLLECTION_NAMES)
-            return np.array([0 for _ in range(21)])
+            # self.vrep_interface.reload_scene(SCENE_PATH, VREP_OBJECT_NAMES, VREP_COLLECTION_NAMES)
+            return np.array([0 for _ in range(12 + self.dof)])
 
 
-def denormalizej_velocity(normalized_velocity):
-    return 2 * (normalized_velocity - 0.5) * MAX_JOINT_VELOCITY
+def denormalize_angle(normalized_angle):
+    return 2 * (normalized_angle - 0.5) * MAX_JOINT_ANGLE
+
+
+def denormalize_discrete_angle(discrete_action, granularity):
+    return 2 * (discrete_action - granularity / 2) * MAX_JOINT_ANGLE / granularity
 
 
 def normalize_ang_velocity(av):
@@ -128,23 +173,4 @@ def denormalize_position(normalized_pos):
 
 
 if __name__ == "__main__":
-    vri = VrepInterface()
-    vg = VrepGrabber()
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
-    vg.step([0.5, 0.5, 0.75, 0.5, 0.5, 0.75, 0.5, 0.5, 0.75])
-    time.sleep(0.3)
+    print(denormalize_discrete_angle(360, 360))

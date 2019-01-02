@@ -16,10 +16,14 @@ class VrepInterface:
         self.collection_handles = {}
         self.vrep_process = None
 
-    def connect_to_vrep(self, scene_path, object_names, collection_names, port=PORT):
+    def connect_to_vrep(self, port=PORT):
         if self.__connect(port):
             self.vrep.simxSynchronous(self.client_id, enable=True)
-            return self.__load_scene(scene_path, object_names, collection_names, port)
+            return True
+        return False
+
+    def load_scene(self, scene_path, object_names, collection_names):
+        return self.__load_scene(scene_path, object_names, collection_names)
 
     def start_vrep(self, scene_path, object_names, collection_names, port=PORT, timeout=10, headless=True):
         def vrep_process():
@@ -45,9 +49,12 @@ class VrepInterface:
 
     def stop_simulation(self):
         if self.vrep.simxStopSimulation(self.client_id, self.vrep.simx_opmode_blocking) == self.vrep.simx_return_ok:
-            return True
-        print("Failed to stop simulation, retrying...")
-        return self.stop_simulation()
+            while True:
+                self.vrep.simxGetIntegerSignal(self.client_id, 'asdf', self.vrep.simx_opmode_blocking)
+                _, res = self.vrep.simxGetInMessageInfo(self.client_id, self.vrep.simx_headeroffset_server_state)
+                if not res & 1:
+                    return True
+        return False
 
     def reload_scene(self, scene_path, object_names, collection_names):
         self.vrep.simxStopSimulation(self.client_id, self.vrep.simx_opmode_blocking)
@@ -70,8 +77,10 @@ class VrepInterface:
         else:
             return linear, angular
 
-    def set_joint_target_velocity(self, joint_name, angular_velocity):
-        res = self.vrep.simxSetJointTargetPosition(self.client_id, self.object_handles[joint_name], angular_velocity,
+    def set_joint_target_angle(self, joint_name, target_angle):
+        res = self.vrep.simxSetJointTargetPosition(self.client_id,
+                                                   self.object_handles[joint_name],
+                                                   target_angle,
                                                    self.vrep.simx_opmode_blocking)
         return res == self.vrep.simx_return_ok
 
@@ -109,8 +118,7 @@ class VrepInterface:
         if res == self.vrep.simx_return_ok:
             results = {}
             for i, handle in enumerate(handles):
-                index = i * 2
-                r = rotations[index]
+                r = rotations[i * 2]
                 results[self.object_names[handle]] = r
             return results
         return {}
@@ -145,32 +153,30 @@ class VrepInterface:
         else:
             return x, y, z
 
-    def __load_scene(self, filepath, object_names, collection_names, port=PORT):
-        if self.__connect(port):
-            res = self.vrep.simxLoadScene(self.client_id, filepath, 0xFF, self.vrep.simx_opmode_blocking)
+    def __load_scene(self, filepath, object_names, collection_names):
+        res = self.vrep.simxLoadScene(self.client_id, filepath, 0xFF, self.vrep.simx_opmode_blocking)
+        if res != self.vrep.simx_return_ok:
+            print("Could not load scene " + filepath)
+            return False
+        for collection_name in collection_names:
+            res, handle = self.vrep.simxGetCollectionHandle(self.client_id, collection_name,
+                                                            self.vrep.simx_opmode_blocking)
             if res != self.vrep.simx_return_ok:
-                print("Could not load scene " + filepath)
+                print("Could not find collection handle for " + collection_name)
                 return False
-            for collection_name in collection_names:
-                res, handle = self.vrep.simxGetCollectionHandle(self.client_id, collection_name,
-                                                                self.vrep.simx_opmode_blocking)
-                if res != self.vrep.simx_return_ok:
-                    print("Could not find collection handle for " + collection_name)
-                    return False
-                self.collection_handles[collection_name] = handle
-            for object_name in object_names:
-                res, handle = self.vrep.simxGetObjectHandle(self.client_id, object_name, self.vrep.simx_opmode_blocking)
-                if res != self.vrep.simx_return_ok:
-                    print("Could not find object handle for " + object_name)
-                    return False
-                self.object_handles[object_name] = handle
-                self.object_names[handle] = object_name
-            return True
-        print("Could not connect to VREP, retrying...")
-        return self.__load_scene(filepath, object_names, collection_names, port=port)
+            self.collection_handles[collection_name] = handle
+        for object_name in object_names:
+            res, handle = self.vrep.simxGetObjectHandle(self.client_id, object_name, self.vrep.simx_opmode_blocking)
+            if res != self.vrep.simx_return_ok:
+                print("Could not find object handle for " + object_name)
+                return False
+            self.object_handles[object_name] = handle
+            self.object_names[handle] = object_name
+        return True
 
     def __connect(self, port):
-        self.vrep.simxFinish(-1)
+        # self.vrep.simxFinish(-1)
+        print(f"Making connection on port {port}...")
         self.client_id = self.vrep.simxStart('127.0.0.1', port, True, True, 1000, 5)
         return self.client_id != -1
 

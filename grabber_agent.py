@@ -1,3 +1,6 @@
+import atexit
+import os
+
 import matplotlib
 import time
 
@@ -7,13 +10,33 @@ from scipy.stats import binned_statistic
 from stable_baselines.common.policies import MlpPolicy, MlpLstmPolicy, LstmPolicy
 from stable_baselines.common.vec_env import SubprocVecEnv, VecEnv, DummyVecEnv
 from stable_baselines import PPO2
-from grabber_env import VrepGrabber
+from grabber_env import VrepGrabber, EnvType
+
+
+DEFAULT_VREP_PORT = 19997
+VREP_PORTS = [19998, 19999, 20000, 20001, 20002, 20003, 20004, 20005]
+
+
+def create_grabber_env(scene_path, port, action_granularity=None):
+    print(f"Creating env on port {port}")
+    return VrepGrabber(scene_path, port, action_granularity=action_granularity)
 
 
 class GrabberAgent:
-    def __init__(self, grabber_env):
-        self.base_env = grabber_env
-        self.env = DummyVecEnv([lambda: grabber_env for _ in range(1)])  # multiprocessing.cpu_count())])
+    def __init__(self, scene_path, action_granularity=None, subproc=True):
+        self.base_env = VrepGrabber(scene_path, DEFAULT_VREP_PORT, action_granularity=action_granularity)
+        if subproc:
+            # TODO
+            creation_functions = [lambda: create_grabber_env(scene_path, 19998, action_granularity),
+                                  lambda: create_grabber_env(scene_path, 19999, action_granularity),
+                                  lambda: create_grabber_env(scene_path, 20000, action_granularity),
+                                  lambda: create_grabber_env(scene_path, 20001, action_granularity),
+                                  lambda: create_grabber_env(scene_path, 20002, action_granularity),
+                                  lambda: create_grabber_env(scene_path, 20003, action_granularity),
+                                  lambda: create_grabber_env(scene_path, 20004, action_granularity)]
+            self.env = SubprocVecEnv(creation_functions)
+        else:
+            self.env = DummyVecEnv([lambda: self.base_env])
         self.model = None
 
     def load_model(self, path):
@@ -31,6 +54,7 @@ class GrabberAgent:
         if self.model is None:
             self.new_model()
         for checkpoint in range(int(timesteps/checkpoint_interval)):
+            print(f"Checkpointing model. Total timesteps: {checkpoint * checkpoint_interval}")
             self.model.learn(total_timesteps=checkpoint_interval, callback=callback)
             self.save_model(path)
 
@@ -159,7 +183,7 @@ def plot_validation(ep_histories, filename=None):
 
 class CustomMlpPolicy(MlpPolicy):
     def __init__(self, sess, ob_space, ac_space, n_env, n_steps, n_batch, **_kwargs):
-        super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, **_kwargs)
+        super().__init__(sess, ob_space, ac_space, n_env, n_steps, n_batch, layers=[32, 32], **_kwargs)
 
 
 class CustomMlpLstmPolicy(MlpLstmPolicy):
@@ -168,26 +192,40 @@ class CustomMlpLstmPolicy(MlpLstmPolicy):
                          **_kwargs)
 
 
-if __name__ == "__main__":
-    PATH_3DOF = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/VREP Repo/3D Model/3dof_grabber.ttt"
-    PATH_6DOF = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/VREP Repo/3D Model/6dof_grabber.ttt"
+def train(env_type, model_name, timesteps, action_granularity=None, starting_model_path=None, verbose=False, subproc=True):
+    os.system("./start_vrep")
+    atexit.register(lambda: os.system("./kill_vrep"))
 
-    name = "64_64_100k_6dof_no_pen"
-    fig_name = f"figures/{name}"
-    model_name = f"models/{name}"
+    time.sleep(10)
+    fig_name = f"figures/{model_name}"
+    model_name = f"models/{model_name}"
 
-    base_env = VrepGrabber(PATH_6DOF, headless=True)
-    ppo_agent = GrabberAgent(base_env)
+    ppo_agent = GrabberAgent(env_type, action_granularity=action_granularity, subproc=subproc)
 
-    ppo_agent.new_model(policy=CustomMlpPolicy, gamma=0.99)
-    # ppo_agent.load_model("models/" + "256_256_256_500k")
+    if starting_model_path is None:
+        ppo_agent.new_model(policy=CustomMlpPolicy, gamma=0.99)
+    else:
+        ppo_agent.load_model(starting_model_path)
     loss_plotter = LossPlotter(max_points=150)
-    ppo_agent.learn(100000,
-                    callback=loss_plotter.get_plot_callback(verbose=False, filename=fig_name, checkpoint_interval=60),
-                    checkpoint_interval=1000,
+    ppo_agent.learn(timesteps,
+                    callback=loss_plotter.get_plot_callback(verbose=verbose, filename=fig_name, checkpoint_interval=60),
+                    checkpoint_interval=10000,
                     path=model_name)
     loss_plotter.save(fig_name)
     ppo_agent.save_model(model_name)
 
-    # ppo_agent.load_model(model_name)
-    # ppo_agent.demo(timestep_sleep=0.1)
+
+def demo(env_type, model_name, action_granularity=None, timestep_sleep=0.2):
+    model_path = f"models/{model_name}"
+
+    ppo_agent = GrabberAgent(env_type, action_granularity=action_granularity, subproc=False)
+
+    ppo_agent.load_model(model_path)
+    ppo_agent.demo(timestep_sleep)
+
+
+if __name__ == "__main__":
+    NAME_3DOF = "32_32_150k_3dof_02height_15gran"
+    NAME_6DOF = "64_64_150k_6dof_02height_15gran"
+
+    train(EnvType.DOF3, NAME_3DOF, 150000, subproc=True, action_granularity=15)
