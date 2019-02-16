@@ -1,0 +1,4 @@
+#!/bin/bash
+
+docker run -p $1:19997 -d dof3
+

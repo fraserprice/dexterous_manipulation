@@ -1,7 +1,0 @@
-#!/bin/bash
-
-for port in `seq 19998 20001`;
-do
-    docker run -p ${port}:${port} -d dof3
-done
-
