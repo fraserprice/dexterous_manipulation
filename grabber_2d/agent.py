@@ -27,18 +27,27 @@ class Grabber2DAgent:
     def new_model(self, policy=MlpPolicy, gamma=0.99):
         self.model = PPO2(policy, self.env, verbose=1, gamma=gamma, n_steps=512)
 
-    def learn(self, timesteps, learning_handler, checkpoint_interval=1000, path=None, learning_rate=0.00025):
+    def learn(self, timesteps, learning_handler, checkpoint_interval=1000, path=None, learning_rate=0.00025,
+              curiosity_path=None):
         self.model.learning_rate = learning_rate
         if self.model is None:
             self.new_model()
         if checkpoint_interval is not None:
             for checkpoint in range(int(timesteps / checkpoint_interval)):
                 print(f"Checkpointing model. Total timesteps: {checkpoint * checkpoint_interval}")
-                cb = learning_handler.get_learn_callback(checkpoint * checkpoint_interval)
+                if curiosity_path is None:
+                    cb = learning_handler.get_learn_callback(checkpoint * checkpoint_interval)
+                else:
+                    cb = learning_handler.get_curiosity_learn_callback(checkpoint * checkpoint_interval)
                 self.model.learn(total_timesteps=checkpoint_interval, callback=cb)
                 self.save_model(path)
+                if curiosity_path is not None:
+                    self.base_env.curiosity_module.save_forward(curiosity_path)
         else:
-            cb = learning_handler.get_learn_callback()
+            if curiosity_path is None:
+                cb = learning_handler.get_learn_callback()
+            else:
+                cb = learning_handler.get_curiosity_learn_callback()
             self.model.learn(total_timesteps=timesteps, callback=cb)
             self.save_model(path)
 

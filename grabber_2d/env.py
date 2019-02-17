@@ -4,11 +4,14 @@ from enum import Enum
 
 import numpy as np
 import pymunk
+import torch
 from pygame.color import THECOLORS
 from pymunk import Space, Body, Poly
 import pymunk.pygame_util as pygame_util
 import pygame
 from gym import Env, spaces
+
+from curiosity_module import CuriosityModule
 
 NO_COLLISION_TYPE = 10
 GHOST_TYPE = 11
@@ -40,6 +43,8 @@ class Grabber2D(Env):
         self.target_range = target_range
         self.target = target
         self.steps = 0
+        self.curiosity_module = None
+        self.previous_observation = None
 
         n_arms = sum(len(arm_segs) for arm_segs in arm_segment_lengths)
         if self.granularity is None:
@@ -52,6 +57,11 @@ class Grabber2D(Env):
                                             high=1.,
                                             shape=(6 + 3 * n_arms,),
                                             dtype=np.float32)
+        self.ext_reward_history = []
+        self.curiosity_loss_history = []
+
+    def add_curiosity_module(self, curiosity_module):
+        self.curiosity_module = curiosity_module
 
     def reset(self):
         self.steps = 0
@@ -76,9 +86,19 @@ class Grabber2D(Env):
         obs = self.__get_observation()
         done = obs[0] < 0 or obs[0] > 1 or obs[1] < 0 or obs[1] > 1 or self.steps > EP_LENGTH
         reward = -np.linalg.norm(np.array(self.target) - np.array((obs[0] * ENV_SIZE, obs[1] * ENV_SIZE))) / 10
+        curiosity_loss = None
+        if self.curiosity_module is not None:
+            if self.previous_observation is not None:
+                curiosity_loss = self.curiosity_module.get_curiosity_loss(action, self.previous_observation, obs).item()
+                reward += curiosity_loss
+            self.previous_observation = obs
         self.steps += 1
 
-        return obs, reward, done, {}
+        ext_reward = reward if curiosity_loss is None else reward - curiosity_loss
+        curiosity_loss = 0 if curiosity_loss is None else curiosity_loss
+        self.__track_info(curiosity_loss, ext_reward)
+
+        return obs, reward, done, {'curiosity_loss': self.curiosity_loss_history, 'ext_reward': self.ext_reward_history}
 
     def render(self, mode='human'):
         self.simulation.render()
@@ -97,7 +117,27 @@ class Grabber2D(Env):
         segment_lengths = [(seg - SEG_LENGTH_RANGE[0]) / (SEG_LENGTH_RANGE[1] - SEG_LENGTH_RANGE[0])
                            for arm_segs in self.arm_segment_lengths for seg in arm_segs]
 
-        return np.array([t_pos[0], t_pos[1], t_ang, t_v[0], t_v[1], t_angv] + segment_positions + segment_lengths)
+        return np.array([t_pos[0], t_pos[1], t_ang,
+                         max(0, min(t_v[0], 1)), max(0, min(t_v[1], 1)),
+                         t_angv] + segment_positions + segment_lengths)
+
+    def __track_info(self, curiosity_loss, ext_reward):
+        self.curiosity_loss_history.append(curiosity_loss)
+        self.ext_reward_history.append(ext_reward)
+        if len(self.curiosity_loss_history) > 512:
+            del self.curiosity_loss_history[0]
+            del self.ext_reward_history[0]
+
+
+class ObservationNormaliser:
+    def __init__(self):
+        n = 0
+        t_pos_0_avg = 0
+        t_pos_1_avg = 0
+        t_ang_avg = 0
+        t_v_0_avg = 0
+        t_v_1_avg = 0
+        t_angv_avg = 0
 
 
 class GrabberSimulation:
