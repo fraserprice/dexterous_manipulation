@@ -4,6 +4,7 @@ from reacher.agent import Simple2DAgent
 from reacher.env import SimpleRobot2D, EnvType, LinkMode, AngleMode, RewardMode, FIXED_LINK_LENGTHS
 from utils import ModelStorage
 
+REPO_PATH = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/"
 
 def train(model_name, description, timesteps, model_storage, new_model=False,
           action_granularity=None, starting_model_path=None, checkpoint_interval=None, link_mode=LinkMode.OPTIMAL,
