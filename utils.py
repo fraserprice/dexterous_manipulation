@@ -1,9 +1,12 @@
+import multiprocessing
+
 import matplotlib
 import time
 
 import numpy as np
 from pymongo import MongoClient
 from scipy.stats import binned_statistic
+from stable_baselines.common.vec_env import SubprocVecEnv
 
 DB_NAME = 'dexterous_manipulation'
 
@@ -99,7 +102,7 @@ class LearningHandler:
 
         self.model_storage.add_timestep_point(self.model_name, timestep + self.t_start, reward, curiosity)
 
-    def save_plot(self, filename, real_time=True):
+    def save_plot(self, filename, real_time=True, curiosity=True):
         from matplotlib import pyplot as plt
 
         fig, ax1 = plt.subplots()
@@ -109,64 +112,52 @@ class LearningHandler:
         ax1.set_ylabel('Average Extrinsic Reward', color=c1)
         ax1.tick_params(axis='y', labelcolor=c1)
 
-        ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
-        c2 = 'tab:blue'
-        ax2.set_ylabel('Curiosity Loss', color=c2)  # we already handled the x-label with ax1
-        ax2.tick_params(axis='y', labelcolor=c2)
+        ax2 = None
+        c2 = None
+        if curiosity:
+            ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+            c2 = 'tab:blue'
+            ax2.set_ylabel('Curiosity Loss', color=c2)  # we already handled the x-label with ax1
+            ax2.tick_params(axis='y', labelcolor=c2)
 
         m = self.model_storage.get_model(self.model_name)
         data = m['realtime_data' if real_time else 'timestep_data']
         x, y_rew, y_cur = data['elapsed' if real_time else 'timesteps'], data['rewards'], data['curiosity']
         if len(x) <= self.max_points:
             ax1.plot(x, y_rew, color=c1)
-
-            ax2.plot(x, y_cur, color=c2)
+            if curiosity:
+                ax2.plot(x, y_cur, color=c2)
         else:
             aggregated_rewards, aggregated_timesteps, _ = binned_statistic(x, y_rew, bins=self.max_points)
             aggregated_curiosity, _, _ = binned_statistic(x, y_cur, bins=self.max_points)
             # plt.cla()
             ax1.plot(aggregated_timesteps[1:], aggregated_rewards, color=c1)
-            ax2.plot(aggregated_timesteps[1:], aggregated_curiosity, color=c2)
+            if curiosity:
+                ax2.plot(aggregated_timesteps[1:], aggregated_curiosity, color=c2)
         fig.tight_layout()
         plt.savefig(filename)
         plt.close()
 
-    def get_curiosity_learn_callback(self, elapsed_timesteps=0):
+    def get_learn_callback(self, elapsed_timesteps=0, batch_size=128, subproc=True, curiosity=True):
         def f(info, _):
-            ext_reward = None
-            curiosity_loss = None
-            timestep = info['timestep'] if 'timestep' in info else None
-            if 'true_reward' in info:
-                ext_reward = np.array(info['runner'].env.buf_infos[0]['ext_reward']).mean()
-                curiosity_loss = np.array(info['runner'].env.buf_infos[0]['curiosity_loss']).mean()
+            timestep = info['update'] * batch_size * (multiprocessing.cpu_count() if subproc else 1)
+            info = info['runner'].env.env_method('get_infos')
+            curiosity_loss = np.array([c for c, _ in info]).mean()
+            ext_reward = np.array([p for _, p in info]).mean()
             if ext_reward is not None and timestep is not None and curiosity_loss is not None:
-                self.add_realtime_point(ext_reward, curiosity_loss)
-                self.add_timestep_point(timestep * 128 + elapsed_timesteps, ext_reward, curiosity_loss)
+                if curiosity:
+                    self.add_realtime_point(ext_reward, curiosity_loss)
+                    self.add_timestep_point(timestep + elapsed_timesteps, ext_reward, curiosity_loss)
+                else:
+                    self.add_realtime_point(ext_reward)
+                    self.add_timestep_point(timestep + elapsed_timesteps, ext_reward)
 
                 matplotlib.use('Agg')
                 m = self.model_storage.get_model(self.model_name)
-                self.save_plot(m['realtime_data']['plot_path'], real_time=True)
-                self.save_plot(m['timestep_data']['plot_path'], real_time=False)
+                self.save_plot(m['realtime_data']['plot_path'], real_time=True, curiosity=curiosity)
+                self.save_plot(m['timestep_data']['plot_path'], real_time=False, curiosity=curiosity)
 
         return f
-
-    def get_learn_callback(self, elapsed_timesteps=0):
-        def f(info, _):
-            reward = None
-            timestep = info['timestep'] if 'timestep' in info else None
-            if 'true_reward' in info:
-                reward = np.array(info['true_reward']).mean()
-            if reward is not None and timestep is not None:
-                self.add_realtime_point(reward)
-                self.add_timestep_point(timestep * 128 + elapsed_timesteps, reward)
-
-                matplotlib.use('Agg')
-                m = self.model_storage.get_model(self.model_name)
-                self.save_plot(m['realtime_data']['plot_path'], real_time=True)
-                self.save_plot(m['timestep_data']['plot_path'], real_time=False)
-
-        return f
-
 
 def plot_validation(ep_histories, filename=None):
     from matplotlib import pyplot as plt

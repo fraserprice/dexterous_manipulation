@@ -33,8 +33,8 @@ Inverse model: s_t, s_t+1 --> enc(s_t), enc(s_t+1) --> a_hat
 
 # noinspection PyArgumentList
 class CuriosityModule:
-    def __init__(self, action_space_size, state_space_size, forward_hidden, use_backward_dynamics=False, dropout=0.4,
-                 examples_before_optimization=1000):
+    def __init__(self, action_space_size, state_space_size, forward_hidden, use_backward_dynamics=False, dropout=0.5,
+                 examples_before_optimization=512):
         self.action_space = action_space_size
         self.state_space = state_space_size
         self.forward_dynamics = None
@@ -81,7 +81,7 @@ class CuriosityModule:
     def initialize_backward_dynamics(self):
         self.backward_dynamics = BackwardDynamics()
 
-    def optimize_forward_dynamics(self, xs, ys, lr=0.00001, weight_decay=0.0001, batch_size=16):
+    def optimize_forward_dynamics(self, xs, ys, lr=0.0001, weight_decay=0.0001, batch_size=16):
         cost = nn.MSELoss()
         optimizer = Adam(self.forward_dynamics.parameters(), lr=lr, weight_decay=weight_decay)
         nb_epochs = 10
@@ -111,7 +111,7 @@ class CuriosityModule:
 
 
 class ForwardDynamics(nn.Module):
-    def __init__(self, input_size, hidden_sizes, output_size, dropout=0.4):
+    def __init__(self, input_size, hidden_sizes, output_size, dropout=0.5):
         super(ForwardDynamics, self).__init__()
         self.layers = []
         self.params = nn.ParameterList()
