@@ -3,7 +3,7 @@ import numpy as np
 
 from simple_reacher.env import LinkMode, RewardMode
 from simple_reacher.run import train
-from utils import ModelStorage
+from common.utils import ModelStorage
 
 REPO_PATH = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/Dexterous Manipulation"
 

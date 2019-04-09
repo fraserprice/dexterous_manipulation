@@ -3,7 +3,7 @@ from stable_baselines.common.policies import MlpPolicy, MlpLstmPolicy
 # from simple_reacher.bayesian_optimization import AdaptiveAgentOptimizer, MultitaskAgentOptimizer
 from simple_reacher.agent import Simple2DAgent
 from simple_reacher.env import SimpleRobot2D, EnvType, LinkMode, AngleMode, RewardMode, FIXED_LINK_LENGTHS
-from utils import ModelStorage, LearningHandler
+from common.utils import ModelStorage, LearningHandler
 
 REPO_PATH = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/Dexterous Manipulation"
 

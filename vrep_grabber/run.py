@@ -2,7 +2,7 @@ from stable_baselines.common.policies import MlpLstmPolicy, MlpPolicy
 
 from vrep_grabber.agent import GrabberAgent, VREP_PORTS, DEFAULT_VREP_PORT
 from vrep_grabber.env import EnvType
-from utils import LearningHandler, ModelStorage
+from common.utils import LearningHandler, ModelStorage
 
 REPO_PATH = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/Dexterous Manipulation"
 

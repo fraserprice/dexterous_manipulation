@@ -1,18 +1,18 @@
 import multiprocessing
 import time
-
 import numpy as np
+
 from stable_baselines import PPO2
 from stable_baselines.common.policies import MlpPolicy
 from stable_baselines.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 
-class ReacherAgent:
-    def __init__(self, reacher_pymunk_env, subproc=True):
-        self.base_env = reacher_pymunk_env
+class PPO2Agent:
+    def __init__(self, base_env, subproc=True):
+        self.base_env = base_env
         self.subproc = subproc
-        if self.subproc:
-            self.env = SubprocVecEnv([lambda: reacher_pymunk_env for _ in range(multiprocessing.cpu_count())])
+        if subproc:
+            self.env = SubprocVecEnv([lambda: base_env for _ in range(multiprocessing.cpu_count())])
         else:
             self.env = DummyVecEnv([lambda: self.base_env])
         self.model = None
@@ -25,20 +25,21 @@ class ReacherAgent:
             raise AssertionError("Model does not exist- cannot be saved.")
         self.model.save(path)
 
-    def new_model(self, policy=MlpPolicy, gamma=0.99):
-        self.model = PPO2(policy, self.env, verbose=1, gamma=gamma, n_steps=128)
+    def new_model(self, policy=MlpPolicy, gamma=0.99, batch_size=128):
+        self.model = PPO2(policy, self.env, verbose=1, gamma=gamma, n_steps=batch_size)
 
     def learn(self, timesteps, learning_handler, checkpoint_interval=1000, path=None, learning_rate=0.00025,
-              curiosity_path=None):
+              curiosity_path=None, batch_size=128):
         curiosity = curiosity_path is not None
         self.model.learning_rate = learning_rate
         if self.model is None:
-            self.new_model()
+            self.new_model(batch_size=batch_size)
         if checkpoint_interval is not None:
             for checkpoint in range(int(timesteps / checkpoint_interval)):
                 cb = learning_handler.get_learn_callback(checkpoint * checkpoint_interval, curiosity=curiosity,
-                                                         subproc=self.subproc)
+                                                         subproc=self.subproc, batch_size=batch_size)
                 self.model.learn(total_timesteps=checkpoint_interval, callback=cb, reset_num_timesteps=False)
+                print("Checkpointing model")
                 self.save_model(path)
                 if curiosity:
                     self.base_env.curiosity_module.save_forward(curiosity_path)
@@ -47,7 +48,7 @@ class ReacherAgent:
             self.model.learn(total_timesteps=timesteps, callback=cb, reset_num_timesteps=False)
             self.save_model(path)
 
-    def demo(self, timestep_sleep=0.2):
+    def demo(self, timestep_sleep=0):
         obs = self.base_env.reset()
         while True:
             action, _states = self.model.predict(obs)

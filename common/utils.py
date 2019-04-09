@@ -7,12 +7,28 @@ import numpy as np
 from pymongo import MongoClient
 from scipy.stats import binned_statistic
 from stable_baselines.common.vec_env import SubprocVecEnv
+from sshtunnel import SSHTunnelForwarder
 
 DB_NAME = 'dexterous_manipulation'
 
 
 class Storage:
     def __init__(self):
+        # MONGO_HOST = "REMOTE_IP_ADDRESS"
+        # MONGO_DB = "DATABASE_NAME"
+        # MONGO_USER = "LOGIN"
+        # MONGO_PASS = "PASSWORD"
+        #
+        # server = SSHTunnelForwarder(
+        #     MONGO_HOST,
+        #     ssh_username=MONGO_USER,
+        #     ssh_password=MONGO_PASS,
+        #     remote_bind_address=('127.0.0.1', 27017)
+        # )
+        #
+        # server.start()
+        #
+        # self.client = MongoClient('127.0.0.1', server.local_bind_port)
         self.client = MongoClient()
         self.db = self.client[DB_NAME]
 
