@@ -1,12 +1,12 @@
-#Dexterous Manipulation
+# Dexterous Manipulation
 
-##Project Description
+## Project Description
 
 TODO
 
-##Deployment to GCP
+## Deployment to GCP
 
-###Setup
+### Setup
 
 Build locally:
 
@@ -24,7 +24,7 @@ Update VM instance with new container:
 
     gcloud compute instances update-container <INSTANCE_NAME> --container-image gcr.io/dexterous-manipulation-238516/<IMAGE_NAME>:<VERSION>
 
-###Info
+### Info
 
 View VM startup logs (provides container name on successful start):
 
@@ -43,7 +43,7 @@ View compute instances:
     gcloud compute instances list
 
 
-###Cleanup
+### Cleanup
 
 Delete compute instance:
 
