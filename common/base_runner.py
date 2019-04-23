@@ -4,10 +4,11 @@ from common.ppo2_agent import PPO2Agent
 from common.curiosity_module import CuriosityModule
 from common.design_optimizer import DesignOptimizer
 from common.utils import LearningHandler, ModelStorage
+import os
 
-REPO_PATH = "/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/Dexterous Manipulation"
-CURIOSITY_HIDDEN = [32, 32, 32]
-POLICY_HIDDEN = [32, 32, 32]
+REPO_PATH = os.getcwd()  #""/Users/fraser/Documents/University/Fourth Year/Dexterous Manipulation/Dexterous Manipulation"
+CURIOSITY_HIDDEN = [32, 32, 32, 32]
+POLICY_HIDDEN = [32, 32, 32, 32]
 
 
 def custom_policy(hidden_size):
@@ -29,6 +30,11 @@ class BaseRunner:
         self.evaluator_class = None
         self.repo_path = REPO_PATH
         self.env_name = ""
+
+    def load_agent(self, name, subproc=True):
+        model_path = f"{self.repo_path}/{self.env_name}/models/agent/{name}"
+        self.agent = PPO2Agent(self.env, subproc=subproc)
+        self.agent.load_model(model_path)
 
     def train(self,
               model_name,

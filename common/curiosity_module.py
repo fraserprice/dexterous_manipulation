@@ -34,7 +34,7 @@ Inverse model: s_t, s_t+1 --> enc(s_t), enc(s_t+1) --> a_hat
 # noinspection PyArgumentList
 class CuriosityModule:
     def __init__(self, action_space_size, state_space_size, forward_hidden, use_backward_dynamics=False, dropout=0.5,
-                 examples_before_optimization=512):
+                 examples_before_optimization=2048):
         self.action_space = action_space_size
         self.state_space = state_space_size
         self.forward_dynamics = None

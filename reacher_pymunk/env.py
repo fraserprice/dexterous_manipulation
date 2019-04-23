@@ -29,7 +29,7 @@ SPARSE_DISTANCE = 0.06
 
 class Reacher(PymunkEnv):
     def __init__(self, arm_anchor_points=ANCHOR_POINT, arm_segment_lengths=LENGTHS,
-                 target=TARGET_POS, seg_length_range=SEG_LENGTH_RANGE, target_range=None, target_points=None,
+                 target=TARGET_POS, target_range=None, target_points=None,
                  granularity=None, render=False, reward_type=RewardType.DENSE, link_mode=LinkMode.RANDOM,
                  motor_action_type=MotorActionType.RATE_FORCE, sparse_distance=SPARSE_DISTANCE):
         super().__init__(render, reward_type, granularity, link_mode, len(arm_segment_lengths), motor_action_type,
@@ -42,10 +42,15 @@ class Reacher(PymunkEnv):
                                             sparse_distance=self.sparse_distance)
         self.arm_anchor_points = arm_anchor_points
         self.arm_segment_lengths = arm_segment_lengths
-        self.seg_length_range = seg_length_range
         self.target_range = target_range
         self.target = target
         self.target_points = target_points
+
+        self.min_seg = SEG_LENGTH_RANGE[0]
+        self.max_seg = SEG_LENGTH_RANGE[1]
+        self.min_force = MIN_MOTOR_FORCE
+        self.max_force = MAX_MOTOR_FORCE
+        self.max_rate = MAX_MOTOR_RATE
 
         self.observation_space = spaces.Box(low=0.,
                                             high=1.,
@@ -61,7 +66,7 @@ class Reacher(PymunkEnv):
     def reset(self):
         self.steps = 0
         if self.link_mode == LinkMode.RANDOM and not self.evaluation_mode:
-            self.arm_segment_lengths = [random.randint(self.seg_length_range[0], self.seg_length_range[1])
+            self.arm_segment_lengths = [random.randint(self.min_seg, self.max_seg)
                                         for _ in self.arm_segment_lengths]
 
         if self.target_points is not None:
@@ -92,17 +97,6 @@ class Reacher(PymunkEnv):
         reward = self.get_curiosity_reward(reward, action, obs)
 
         return obs, reward, done, {'curiosity_loss': self.curiosity_loss_history, 'ext_reward': self.ext_reward_history}
-
-    def denormalize_action(self, action):
-        denormalized_action = [rate * MAX_MOTOR_RATE * 2 - MAX_MOTOR_RATE for rate in action[0:self.n_joints]]
-        if self.motor_action_type == MotorActionType.RATE_FORCE:
-            denormalized_action += [force * (MAX_MOTOR_FORCE - MIN_MOTOR_FORCE) + MIN_MOTOR_FORCE
-                                    for force in action[self.n_joints:2 * self.n_joints]]
-        if self.length_actions and self.steps == 0:
-            links = [l * (SEG_LENGTH_RANGE[1] - SEG_LENGTH_RANGE[0]) + SEG_LENGTH_RANGE[0] for l in
-                     action[-self.n_joints:]]
-            denormalized_action += links
-        return denormalized_action
 
     def get_observation(self):
         targ_pos = [coord / ENV_SIZE for coord in self.simulation.target_position]
@@ -168,4 +162,3 @@ class ReacherSimulation(PymunkSimulation):
         pygame.display.flip()
         self.clock.tick(50)
         pygame.display.set_caption("fps: " + str(self.clock.get_fps()))
-

@@ -6,8 +6,6 @@ import time
 import numpy as np
 from pymongo import MongoClient
 from scipy.stats import binned_statistic
-from stable_baselines.common.vec_env import SubprocVecEnv
-from sshtunnel import SSHTunnelForwarder
 
 DB_NAME = 'dexterous_manipulation'
 
@@ -29,7 +27,7 @@ class Storage:
         # server.start()
         #
         # self.client = MongoClient('127.0.0.1', server.local_bind_port)
-        self.client = MongoClient()
+        self.client = MongoClient("mongodb://admin:7yT9NjqzEfmZp0qL@dexterousmanipulation-shard-00-00-svkes.gcp.mongodb.net:27017,dexterousmanipulation-shard-00-01-svkes.gcp.mongodb.net:27017,dexterousmanipulation-shard-00-02-svkes.gcp.mongodb.net:27017/test?ssl=true&replicaSet=dexterousmanipulation-shard-0&authSource=admin&retryWrites=true")
         self.db = self.client[DB_NAME]
 
 
@@ -174,6 +172,7 @@ class LearningHandler:
                 self.save_plot(m['timestep_data']['plot_path'], real_time=False, curiosity=curiosity)
 
         return f
+
 
 def plot_validation(ep_histories, filename=None):
     from matplotlib import pyplot as plt

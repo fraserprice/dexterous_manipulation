@@ -20,26 +20,34 @@ class PymunkEnv(Env, ABC):
         self.do_render = do_render
         self.reward_type = reward_type
         self.granularity = granularity
-        self.n_joints = n_joints
         self.motor_action_type = motor_action_type
         self.simulation_class = simulation_class
+
+        self.min_seg = None
+        self.max_seg = None
+        self.min_force = None
+        self.max_force = None
+        self.max_rate = None
+
+        self.steps = 0
         self.target = None
         self.arm_anchor_points = None
         self.arm_segment_lengths = None
-
-        self.steps = 0
         self.curiosity_module = None
         self.previous_observation = None
         self.evaluation_mode = False
         self.ext_reward_history = []
         self.curiosity_loss_history = []
+        self.observation_means = []
+        self.observation_deviations = []
+        self.observation_n = 0
         self.simulation = None
 
+        self.n_joints = n_joints
         self.length_actions = link_mode == LinkMode.OPTIMAL or link_mode == LinkMode.GENERAL_OPTIMAL
         self.seg_length_actions = self.n_joints if self.length_actions else 0
         self.joint_actions = self.n_joints * (2 if self.motor_action_type == MotorActionType.RATE_FORCE else 1)
         actions = self.joint_actions + self.seg_length_actions
-
         if self.granularity is None:
             self.action_space = spaces.Box(low=0., high=1., shape=(actions,), dtype=np.float32)
             self.action_space_type = ActionSpace.CONTINUOUS
@@ -52,10 +60,6 @@ class PymunkEnv(Env, ABC):
 
     def add_curiosity_module(self, curiosity_module):
         self.curiosity_module = curiosity_module
-
-    def __track_info(self, curiosity_loss, ext_reward):
-        self.curiosity_loss_history.append(curiosity_loss)
-        self.ext_reward_history.append(ext_reward)
 
     def get_infos(self):
         info = (sum(self.curiosity_loss_history) / len(self.curiosity_loss_history),
@@ -76,36 +80,43 @@ class PymunkEnv(Env, ABC):
 
         ext_reward = reward if curiosity_loss is None else reward - curiosity_loss
         curiosity_loss = 0 if curiosity_loss is None else curiosity_loss
-        self.__track_info(curiosity_loss, ext_reward)
+        self.curiosity_loss_history.append(curiosity_loss)
+        self.ext_reward_history.append(ext_reward)
 
         return reward
 
-    @abstractmethod
     def denormalize_action(self, action):
-        return NotImplemented
+        denormalized_action = [rate * self.max_rate * 2 - self.max_rate for rate in action[0:self.n_joints]]
+        if self.motor_action_type == MotorActionType.RATE_FORCE:
+            denormalized_action += [force * (self.max_force - self.min_force) + self.min_force
+                                    for force in action[self.n_joints:2 * self.n_joints]]
+        if self.length_actions and self.steps == 0:
+            links = [l * (self.max_seg - self.min_seg) + self.min_seg for l in
+                     action[-self.n_joints:]]
+            denormalized_action += links
+        return denormalized_action
+
+    def standardize_observation(self, obs):
+        self.observation_n += 1
+        if self.observation_n == 1:
+            self.observation_means = obs
+            self.observation_deviations = [0] * len(obs)
+            return self.observation_deviations
+        standardized_obs = []
+        for i, o in enumerate(obs):
+            new_mean = self.observation_means[i] + (o - self.observation_means[i]) / self.observation_n
+            self.observation_deviations[i] = math.sqrt(((self.observation_n - 1) * self.observation_deviations[i] ** 2
+                                             + (o - new_mean) * (o - self.observation_means[i])) / self.observation_n)
+            self.observation_means[i] = new_mean
+            if self.observation_deviations[i] == 0:
+                standardized_obs.append(0)
+            else:
+                standardized_obs.append((o - self.observation_means[i]) / self.observation_deviations[i])
+        return np.array(standardized_obs)
 
     @abstractmethod
     def get_observation(self):
         return NotImplemented
-
-    def new_simulation(self, anchor, seg_lengths, target, render, sparse):
-        self.simulation = self.simulation_class(anchor, seg_lengths, target, render, sparse)
-
-    def apply_action(self, action):
-        multiplier = 1 if self.action_space_type == ActionSpace.CONTINUOUS else 1. / self.granularity
-        # noinspection PyTypeChecker
-        denormalized_action = self.denormalize_action(action * multiplier)
-        if not self.length_actions or self.steps > 0 or self.evaluation_mode:
-            self.simulation.set_motor_rates(denormalized_action[0:self.n_joints])
-            if self.motor_action_type == MotorActionType.RATE_FORCE:
-                self.simulation.set_motor_max_forces(denormalized_action[self.n_joints:2 * self.n_joints])
-            self.simulation.step()
-        else:
-            self.arm_segment_lengths = denormalized_action[-2:]
-            self.new_simulation(self.arm_anchor_points, self.arm_segment_lengths, self.target, self.do_render,
-                                (self.reward_type == RewardType.SPARSE))
-
-        return self.get_observation()
 
 
 class PymunkSimulation:

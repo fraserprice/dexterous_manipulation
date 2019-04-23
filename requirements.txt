@@ -1,0 +1,10 @@
+Click
+tensorflow
+stable-baselines
+torch
+gym
+pygame
+pymunk
+matplotlib
+pymongo
+scipy
