@@ -1,17 +1,3 @@
-"""
-Build locally:
-docker build -t gcr.io/dexterous-manipulation-238516/dex-image:{VERSION}
-
-Push to GCP:
-docker push gcr.io/dexterous-manipulation-238516/dex-image:{VERSION}
-
-Create GCP cluster (can't use GPU for free tier):
-gcloud container clusters create [CLUSTER_NAME] \
---accelerator type=[GPU_TYPE],count=[AMOUNT] \
---region [REGION] --node-locations [ZONE],[ZONE]
-
-
-"""
 from common.constants import LinkMode
 from grabber_pymunk.runner import GrabberRunner
 from reacher_pymunk.runner import ReacherRunner
