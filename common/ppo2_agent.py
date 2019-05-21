@@ -1,3 +1,4 @@
+import matplotlib
 import multiprocessing
 import time
 import numpy as np
@@ -8,17 +9,19 @@ from stable_baselines.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 
 class PPO2Agent:
-    def __init__(self, base_env, subproc=True):
+    def __init__(self, base_env, subproc=True, envs=64, ):
         self.base_env = base_env
         self.subproc = subproc
         if subproc:
-            self.env = SubprocVecEnv([lambda: base_env for _ in range(multiprocessing.cpu_count())])
+            envs = multiprocessing.cpu_count() if envs is None else envs
+            self.env = SubprocVecEnv([lambda: base_env for _ in range(envs)])
         else:
             self.env = DummyVecEnv([lambda: self.base_env])
         self.model = None
 
-    def load_model(self, path):
+    def load_model(self, path, model_name):
         self.model = PPO2.load(path, self.env)
+        self.env.env_method("load_normalization_info", model_name=model_name)
 
     def save_model(self, path="ppo2_simple_robot"):
         if self.model is None:
@@ -39,10 +42,14 @@ class PPO2Agent:
                 cb = learning_handler.get_learn_callback(checkpoint * checkpoint_interval, curiosity=curiosity,
                                                          subproc=self.subproc, batch_size=batch_size)
                 self.model.learn(total_timesteps=checkpoint_interval, callback=cb, reset_num_timesteps=False)
-                print("Checkpointing model")
                 self.save_model(path)
                 if curiosity:
                     self.base_env.curiosity_module.save_forward(curiosity_path)
+
+                matplotlib.use('Agg')
+                m = learning_handler.model_storage.get_model(learning_handler.model_name)
+                learning_handler.save_plot(m['realtime_data']['plot_path'], real_time=True, curiosity=curiosity)
+                learning_handler.save_plot(m['timestep_data']['plot_path'], real_time=False, curiosity=curiosity)
         else:
             cb = learning_handler.get_learn_callback(curiosity=curiosity, subproc=self.subproc)
             self.model.learn(total_timesteps=timesteps, callback=cb, reset_num_timesteps=False)
@@ -52,7 +59,7 @@ class PPO2Agent:
         obs = self.base_env.reset()
         while True:
             action, _states = self.model.predict(obs)
-            obs, _, done, info = self.base_env.step(action)
+            obs, _, done, info = self.base_env.step(action, render=True)
             self.base_env.render()
             time.sleep(timestep_sleep)
             if done:

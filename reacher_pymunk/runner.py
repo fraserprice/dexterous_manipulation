@@ -1,5 +1,8 @@
 from common.base_runner import BaseRunner
+from common.constants import AgentType
 from common.design_optimizer import evaluate_design
+
+from reacher_pymunk.design_env import ReacherDesign
 from reacher_pymunk.env import Reacher, SEG_LENGTH_RANGE, LENGTHS, LinkMode, TARGET_RANGE, MotorActionType, RewardType,\
     SPARSE_DISTANCE
 
@@ -21,10 +24,11 @@ class ReacherEvaluator:
 
 
 class ReacherRunner(BaseRunner):
-    def __init__(self, granularity=None, lengths=LENGTHS, seg_length_range=SEG_LENGTH_RANGE, link_mode=LinkMode.RANDOM,
+    def __init__(self, granularity=None, lengths=LENGTHS, link_mode=LinkMode.RANDOM,
                  target_range=TARGET_RANGE, motor_action_type=MotorActionType.RATE_FORCE, target_points=None,
-                 reward_type=RewardType.SPARSE, sparse_distance=SPARSE_DISTANCE, render=False):
-        super().__init__()
+                 reward_type=RewardType.SPARSE, sparse_distance=SPARSE_DISTANCE, render=False,
+                 agent_type=AgentType.PPO):
+        super().__init__(agent_type=agent_type)
         self.env = Reacher(granularity=granularity,
                            arm_segment_lengths=lengths,
                            reward_type=reward_type,
@@ -38,6 +42,14 @@ class ReacherRunner(BaseRunner):
         self.evaluator_class = ReacherEvaluator
 
 
+class ReacherDesignRunner(BaseRunner):
+    def __init__(self, reacher_agent, reacher_env=None, agent_type=AgentType.PPO, render=False):
+        super().__init__(agent_type=agent_type)
+        self.env = ReacherDesign(reacher_agent, reacher_env=reacher_env, render=render)
+        self.env_name = "reacher_pymunk"
+        self.evaluator_class = ReacherEvaluator
+
+
 if __name__ == "__main__":
     NAME = "test123"
     DESCRIPTION = "Desc: Fixed links (200, 200), random target (50, 550), random start angles, 1024 batch-size\n" \
@@ -47,10 +59,10 @@ if __name__ == "__main__":
                   "Granularity: Cont"
 
     reacher_runner = ReacherRunner(granularity=10, link_mode=LinkMode.GENERAL_OPTIMAL, sparse_distance=0.06)
-    reacher_runner.load_agent(NAME)
-    # reacher_runner.train(timesteps=11000, model_name=NAME, description=DESCRIPTION,
-    #                      new_model=True, policy_hidden=[32, 32, 32], checkpoint_interval=5000,
-    #                      learning_rate=0.00025, gamma=0.95, batch_size=256)
-    reacher_runner.bo_search({'link_1': (20, 200), 'link_2': (20, 200)}, n_iter=5)
+    # reacher_runner.load_agent(NAME)
+    reacher_runner.train(timesteps=11000, model_name=NAME, description=DESCRIPTION,
+                         new_model=True, policy_hidden=[32, 32, 32], checkpoint_interval=5000,
+                         learning_rate=0.00025, gamma=0.95, batch_size=256)
+    # reacher_runner.bo_search({'link_1': (20, 200), 'link_2': (20, 200)}, n_iter=5)
 
     reacher_runner.demo(NAME, design={'link_1': 20, 'link_2': 20})

@@ -1,4 +1,3 @@
-import math
 import random
 
 import numpy as np
@@ -8,7 +7,7 @@ from pymunk import Circle
 import pygame
 from gym import spaces
 
-from common.constants import MotorActionType, RewardType, LinkMode
+from common.constants import MotorActionType, RewardType, LinkMode, ActionSpace
 from common.pymunk_env import PymunkEnv, PymunkSimulation, ENV_SIZE
 
 NO_COLLISION_TYPE = 10
@@ -29,8 +28,8 @@ SPARSE_DISTANCE = 0.06
 
 class Reacher(PymunkEnv):
     def __init__(self, arm_anchor_points=ANCHOR_POINT, arm_segment_lengths=LENGTHS,
-                 target=TARGET_POS, target_range=None, target_points=None,
-                 granularity=None, render=False, reward_type=RewardType.DENSE, link_mode=LinkMode.RANDOM,
+                 target=TARGET_POS, target_range=TARGET_RANGE, target_points=None,
+                 granularity=None, render=False, reward_type=RewardType.SPARSE, link_mode=LinkMode.FIXED,
                  motor_action_type=MotorActionType.RATE_FORCE, sparse_distance=SPARSE_DISTANCE):
         super().__init__(render, reward_type, granularity, link_mode, len(arm_segment_lengths), motor_action_type,
                          ReacherSimulation)
@@ -54,7 +53,7 @@ class Reacher(PymunkEnv):
 
         self.observation_space = spaces.Box(low=0.,
                                             high=1.,
-                                            shape=(4 + 3 * self.n_joints + (1 if self.length_actions else 0),),
+                                            shape=(4 + 7 * self.n_joints + (1 if self.length_actions else 0),),
                                             dtype=np.float32)
 
     def set_evaluation_design(self, design):
@@ -81,17 +80,31 @@ class Reacher(PymunkEnv):
 
         return self.get_observation()
 
-    def step(self, action):
-        obs = self.apply_action(action)
+    def step(self, action, render=False):
+        multiplier = 1 if self.action_space_type == ActionSpace.CONTINUOUS else 1. / self.granularity
+        # noinspection PyTypeChecker
+        denormalized_action = self.denormalize_action(action * multiplier)
+        if not self.length_actions or self.steps > 0 or self.evaluation_mode:
+            self.simulation.set_motor_rates(denormalized_action[0:self.n_joints])
+            if self.motor_action_type == MotorActionType.RATE_FORCE:
+                self.simulation.set_motor_max_forces(denormalized_action[self.n_joints:2 * self.n_joints])
+            self.simulation.step()
+        else:
+            self.arm_segment_lengths = denormalized_action[-self.n_joints:]
+            self.simulation = ReacherSimulation(self.arm_anchor_points, self.arm_segment_lengths, self.target,
+                                                do_render=self.do_render, sparse=(self.reward_type == RewardType.SPARSE),
+                                                sparse_distance=self.sparse_distance)
+
+        obs = self.get_observation()
 
         end_effector_pos = np.array([coord / ENV_SIZE for coord in self.simulation.end_effector_body.position])
         distance = np.linalg.norm(np.array(obs[0:2]) - end_effector_pos)
         if self.reward_type == RewardType.SPARSE:
-            reward = 10 if distance < self.sparse_distance else 0
+            reward = 1 if distance < self.sparse_distance else 0
         elif self.reward_type == RewardType.DENSE:
             reward = -distance
         else:
-            reward = (10 if distance < self.sparse_distance else 0) - distance
+            reward = (1 if distance < self.sparse_distance else 0) - distance
         done = self.steps > EP_LENGTH
 
         reward = self.get_curiosity_reward(reward, action, obs)
@@ -99,25 +112,23 @@ class Reacher(PymunkEnv):
         return obs, reward, done, {'curiosity_loss': self.curiosity_loss_history, 'ext_reward': self.ext_reward_history}
 
     def get_observation(self):
-        targ_pos = [coord / ENV_SIZE for coord in self.simulation.target_position]
-        end_pos = [coord / ENV_SIZE for coord in self.simulation.end_effector_body.position]
-        segment_angles = [b.angle / (2 * math.pi) for b in self.simulation.segment_bodies]
-        segment_angvs = [(seg.angular_velocity + 4) / 8 for seg in self.simulation.segment_bodies]
-        segment_lengths = [(seg - SEG_LENGTH_RANGE[0]) / (SEG_LENGTH_RANGE[1] - SEG_LENGTH_RANGE[0])
-                           for seg in self.arm_segment_lengths]
-
-        # obs = targ_pos + segment_angles + segment_lengths + segment_angvs
-        obs = targ_pos + end_pos + segment_angles + segment_lengths + segment_angvs
+        obs = list(self.simulation.target_position) + list(self.simulation.end_effector_body.position)
+        for body in self.simulation.segment_bodies:
+            obs.append(body.angle)
+            obs.append(body.angular_velocity)
+            obs += list(body.position) + list(body.velocity)
+        obs += self.arm_segment_lengths
         if self.length_actions:
             if self.steps == 0:
-                obs[-2 * len(segment_angvs):-len(segment_angvs)] = [0] * len(segment_angvs)
+                obs[-len(self.arm_segment_lengths):] = [0] * len(self.arm_segment_lengths)
                 obs.append(0)
                 if self.link_mode == LinkMode.GENERAL_OPTIMAL:
                     obs[0:2] = [0] * 2
             else:
                 obs.append(1)
 
-        return np.array(obs)
+        normalized = self.normalize_observation(obs)
+        return normalized
 
 
 class ReacherSimulation(PymunkSimulation):

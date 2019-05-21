@@ -1,22 +1,24 @@
 import math
 import random
-from abc import ABC, abstractmethod
+from abc import ABC
 
 import pygame
 import pymunk
-from gym import Env, spaces
+from gym import spaces
 from pymunk import pygame_util, Space
 import numpy as np
 
-from common.constants import LinkMode, MotorActionType, ActionSpace, RewardType
+from common.constants import LinkMode, MotorActionType, ActionSpace
+from common.normalized_env import NormalizedEnv
 
 NO_COLLISION_TYPE = 10
 GHOST_TYPE = 11
 ENV_SIZE = 600
 
 
-class PymunkEnv(Env, ABC):
+class PymunkEnv(NormalizedEnv, ABC):
     def __init__(self, do_render, reward_type, granularity, link_mode, n_joints, motor_action_type, simulation_class):
+        super().__init__()
         self.do_render = do_render
         self.reward_type = reward_type
         self.granularity = granularity
@@ -29,18 +31,10 @@ class PymunkEnv(Env, ABC):
         self.max_force = None
         self.max_rate = None
 
-        self.steps = 0
         self.target = None
         self.arm_anchor_points = None
         self.arm_segment_lengths = None
-        self.curiosity_module = None
-        self.previous_observation = None
         self.evaluation_mode = False
-        self.ext_reward_history = []
-        self.curiosity_loss_history = []
-        self.observation_means = []
-        self.observation_deviations = []
-        self.observation_n = 0
         self.simulation = None
 
         self.n_joints = n_joints
@@ -49,7 +43,7 @@ class PymunkEnv(Env, ABC):
         self.joint_actions = self.n_joints * (2 if self.motor_action_type == MotorActionType.RATE_FORCE else 1)
         actions = self.joint_actions + self.seg_length_actions
         if self.granularity is None:
-            self.action_space = spaces.Box(low=0., high=1., shape=(actions,), dtype=np.float32)
+            self.action_space = spaces.Box(low=-1., high=1., shape=(actions,), dtype=np.float32)
             self.action_space_type = ActionSpace.CONTINUOUS
         else:
             self.action_space = spaces.MultiDiscrete([granularity] * actions)
@@ -58,34 +52,8 @@ class PymunkEnv(Env, ABC):
     def render(self, mode='human'):
         self.simulation.render()
 
-    def add_curiosity_module(self, curiosity_module):
-        self.curiosity_module = curiosity_module
-
-    def get_infos(self):
-        info = (sum(self.curiosity_loss_history) / len(self.curiosity_loss_history),
-                sum(self.ext_reward_history) / len(self.ext_reward_history))
-        self.curiosity_loss_history = []
-        self.ext_reward_history = []
-        return info
-
-    def get_curiosity_reward(self, reward, action, obs):
-        curiosity_loss = None
-        if self.curiosity_module is not None:
-            if self.previous_observation is not None:
-                curiosity_loss = 0.01 * self.curiosity_module.get_curiosity_loss(action, self.previous_observation,
-                                                                                 obs).item()
-                reward += curiosity_loss
-            self.previous_observation = obs
-        self.steps += 1
-
-        ext_reward = reward if curiosity_loss is None else reward - curiosity_loss
-        curiosity_loss = 0 if curiosity_loss is None else curiosity_loss
-        self.curiosity_loss_history.append(curiosity_loss)
-        self.ext_reward_history.append(ext_reward)
-
-        return reward
-
     def denormalize_action(self, action):
+        action = [(a + 1) / 2 for a in action]
         denormalized_action = [rate * self.max_rate * 2 - self.max_rate for rate in action[0:self.n_joints]]
         if self.motor_action_type == MotorActionType.RATE_FORCE:
             denormalized_action += [force * (self.max_force - self.min_force) + self.min_force
@@ -95,28 +63,6 @@ class PymunkEnv(Env, ABC):
                      action[-self.n_joints:]]
             denormalized_action += links
         return denormalized_action
-
-    def standardize_observation(self, obs):
-        self.observation_n += 1
-        if self.observation_n == 1:
-            self.observation_means = obs
-            self.observation_deviations = [0] * len(obs)
-            return self.observation_deviations
-        standardized_obs = []
-        for i, o in enumerate(obs):
-            new_mean = self.observation_means[i] + (o - self.observation_means[i]) / self.observation_n
-            self.observation_deviations[i] = math.sqrt(((self.observation_n - 1) * self.observation_deviations[i] ** 2
-                                             + (o - new_mean) * (o - self.observation_means[i])) / self.observation_n)
-            self.observation_means[i] = new_mean
-            if self.observation_deviations[i] == 0:
-                standardized_obs.append(0)
-            else:
-                standardized_obs.append((o - self.observation_means[i]) / self.observation_deviations[i])
-        return np.array(standardized_obs)
-
-    @abstractmethod
-    def get_observation(self):
-        return NotImplemented
 
 
 class PymunkSimulation:
@@ -151,7 +97,7 @@ class PymunkSimulation:
 
     def step(self):
         dt = 0.03
-        steps = 100
+        steps = 30
         for i in range(steps):
             self.space.step(dt / steps)
 

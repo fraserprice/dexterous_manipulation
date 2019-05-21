@@ -25,9 +25,9 @@ TARGET_MASS = 5
 SEG_LENGTH_RANGE = (50, 250)
 TARGET_RANGE = (50, 50)
 ANCHOR_POINTS = ((450, 350), (150, 350))
-LENGTHS = ((150, 150, 150), (150, 150, 150))
+LENGTHS = ((150, 150), (150, 150))
 OBJECT_SIZE = 100
-TARGET_SIZE = 115
+TARGET_SIZE = 130
 SPARSE_DISTANCE = 0.3
 
 
@@ -64,8 +64,8 @@ class Grabber(PymunkEnv):
                                             dtype=np.float32)
 
     def set_evaluation_design(self, design):
-        self.arm_segment_lengths = ((design['l11'], design['l12'], design['l13']),
-                                    (design['l21'], design['l22'], design['l23']))
+        self.arm_segment_lengths = ((design['l11'], design['l12']),
+                                    (design['l21'], design['l22']))
 
     def reset(self):
         self.steps = 0
@@ -85,7 +85,7 @@ class Grabber(PymunkEnv):
 
         return self.get_observation()
 
-    def step(self, action):
+    def step(self, action, render=False):
         multiplier = 1 if self.action_space_type == ActionSpace.CONTINUOUS else 1. / self.granularity
         # noinspection PyTypeChecker
         denormalized_action = self.denormalize_action(action * multiplier)
@@ -107,7 +107,7 @@ class Grabber(PymunkEnv):
 
         distance = np.linalg.norm(np.array(self.target) - np.array((obs[0] * ENV_SIZE, obs[1] * ENV_SIZE))) * 0.01
         if self.sparse:
-            reward = 10 if self.simulation.within_target() else 0
+            reward = 1 if self.simulation.within_target() else 0
         else:
             reward = -distance
         done = self.steps > EP_LENGTH
@@ -128,7 +128,8 @@ class Grabber(PymunkEnv):
 
         observation = [obj_pos[0], obj_pos[1], obj_ang, obj_v[0], obj_v[1], obj_angv] \
                       + segment_positions + segment_lengths + [targ_pos[0], targ_pos[1], targ_ang]
-        return self.standardize_observation(observation)
+        return self.normalize_observation(observation)
+        # return self.standardize_observation(observation)
 
 
 class GrabberSimulation(PymunkSimulation, ABC):

@@ -7,6 +7,8 @@ import numpy as np
 from pymongo import MongoClient
 from scipy.stats import binned_statistic
 
+from common.constants import AgentType
+
 DB_NAME = 'dexterous_manipulation'
 
 
@@ -27,7 +29,8 @@ class Storage:
         # server.start()
         #
         # self.client = MongoClient('127.0.0.1', server.local_bind_port)
-        self.client = MongoClient("mongodb://admin:7yT9NjqzEfmZp0qL@dexterousmanipulation-shard-00-00-svkes.gcp.mongodb.net:27017,dexterousmanipulation-shard-00-01-svkes.gcp.mongodb.net:27017,dexterousmanipulation-shard-00-02-svkes.gcp.mongodb.net:27017/test?ssl=true&replicaSet=dexterousmanipulation-shard-0&authSource=admin&retryWrites=true")
+        self.client = MongoClient(
+            "mongodb://admin:7yT9NjqzEfmZp0qL@dexterousmanipulation-shard-00-00-svkes.gcp.mongodb.net:27017,dexterousmanipulation-shard-00-01-svkes.gcp.mongodb.net:27017,dexterousmanipulation-shard-00-02-svkes.gcp.mongodb.net:27017/test?ssl=true&replicaSet=dexterousmanipulation-shard-0&authSource=admin&retryWrites=true")
         self.db = self.client[DB_NAME]
 
 
@@ -42,6 +45,10 @@ class ModelStorage(Storage):
             'description': description,
             'model_path': model_path,
             'curiosity_forward_path': curiosity_fwd_path,
+            'normalization_info': {
+                'observation_max': [],
+                'observation_min': []
+            },
             'realtime_data': {
                 'plot_path': r_plot_path,
                 'elapsed': [],
@@ -68,28 +75,38 @@ class ModelStorage(Storage):
     def add_realtime_point(self, name, elapsed, reward, curiosity=None):
         update = {
             'realtime_data.elapsed': int(elapsed),
-            'realtime_data.rewards': float(reward),
-            'realtime_data.curiosity': 0 if curiosity is None else curiosity
+            'realtime_data.rewards': float(reward)
         }
+        if curiosity:
+            update['realtime_data.curiosity'] = curiosity
         self.models.update_one({"name": name}, {"$push": update}, upsert=False)
 
     def add_timestep_point(self, name, timestep, reward, curiosity=None):
         update = {
             'timestep_data.timesteps': int(timestep),
-            'timestep_data.rewards': float(reward),
-            'timestep_data.curiosity': 0 if curiosity is None else curiosity
+            'timestep_data.rewards': float(reward)
         }
+        if curiosity:
+            update['timestep_data.curiosity'] = curiosity
         self.models.update_one({"name": name}, {"$push": update}, upsert=False)
+
+    def set_normalization_info(self, name, observation_max, observation_min):
+        update = {
+            'normalization_info.observation_max': observation_max,
+            'normalization_info.observation_min': observation_min
+        }
+        self.models.update_one({"name": name}, {"$set": update}, upsert=False)
 
     def remove_model(self, name):
         self.models.delete_many({"name": name})
 
 
 class LearningHandler:
-    def __init__(self, model_name, model_storage, max_points=200):
+    def __init__(self, model_name, model_storage, max_points=200, agent_type=AgentType.PPO):
         self.model_storage = model_storage
         self.model_name = model_name
         self.max_points = max_points
+        self.agent_type = agent_type
         self.r_start = None
         self.t_start = None
         self.last_checkpoint = 0
@@ -143,21 +160,28 @@ class LearningHandler:
                 ax2.plot(x, y_cur, color=c2)
         else:
             aggregated_rewards, aggregated_timesteps, _ = binned_statistic(x, y_rew, bins=self.max_points)
-            aggregated_curiosity, _, _ = binned_statistic(x, y_cur, bins=self.max_points)
             # plt.cla()
             ax1.plot(aggregated_timesteps[1:], aggregated_rewards, color=c1)
             if curiosity:
+                aggregated_curiosity, _, _ = binned_statistic(x, y_cur, bins=self.max_points)
                 ax2.plot(aggregated_timesteps[1:], aggregated_curiosity, color=c2)
         fig.tight_layout()
         plt.savefig(filename)
         plt.close()
 
     def get_learn_callback(self, elapsed_timesteps=0, batch_size=128, subproc=True, curiosity=True):
+        agent_type = self.agent_type
         def f(info, _):
-            timestep = info['update'] * batch_size * (multiprocessing.cpu_count() if subproc else 1)
-            info = info['runner'].env.env_method('get_infos')
-            curiosity_loss = np.array([c for c, _ in info]).mean()
-            ext_reward = np.array([p for _, p in info]).mean()
+            if agent_type == AgentType.PPO:
+                timestep = info['update'] * batch_size * (multiprocessing.cpu_count() if subproc else 1)
+                infos = info['runner'].env.env_method('get_infos')
+                curiosity_loss = np.mean(np.array([i['cur'] for i in infos]))
+                ext_reward = np.mean(np.array([i['rew'] for i in infos]))
+                o_max = list(np.max(np.array([i['norm']['observation_max'] for i in infos]), axis=0))
+                o_min = list(np.max(np.array([i['norm']['observation_min'] for i in infos]), axis=0))
+            else:
+                timestep = info['n_updates'] * batch_size
+                curiosity_loss, ext_reward = info['self'].env.get_infos()
             if ext_reward is not None and timestep is not None and curiosity_loss is not None:
                 if curiosity:
                     self.add_realtime_point(ext_reward, curiosity_loss)
@@ -165,11 +189,7 @@ class LearningHandler:
                 else:
                     self.add_realtime_point(ext_reward)
                     self.add_timestep_point(timestep + elapsed_timesteps, ext_reward)
-
-                matplotlib.use('Agg')
-                m = self.model_storage.get_model(self.model_name)
-                self.save_plot(m['realtime_data']['plot_path'], real_time=True, curiosity=curiosity)
-                self.save_plot(m['timestep_data']['plot_path'], real_time=False, curiosity=curiosity)
+                    self.model_storage.set_normalization_info(self.model_name, o_max, o_min)
 
         return f
 
